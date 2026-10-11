@@ -1,0 +1,234 @@
+From 80c6c8dddacdcc0af2e6e028c4a5d06d4019fdc9 Mon Sep 17 00:00:00 2001
+From: Spenser Truex <truex@equwal.com>
+Date: Sun, 11 Oct 2026 07:07:02 +0000
+Subject: [PATCH] vi: add text objects aw iw aW iW, quotes and brackets for c,
+ d and y
+
+---
+ src/cmd/ksh93/edit/vi.c | 168 +++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 165 insertions(+), 3 deletions(-)
+
+diff --git a/src/cmd/ksh93/edit/vi.c b/src/cmd/ksh93/edit/vi.c
+index 5a98b82..1aafa71 100644
+--- a/src/cmd/ksh93/edit/vi.c
++++ b/src/cmd/ksh93/edit/vi.c
+@@ -99,6 +99,7 @@ typedef struct _vi_
+ 	int first_wind;		/* first column of window */
+ 	int last_wind;		/* last column in window */
+ 	int lastmotion;		/* last motion */
++	int lastobject;		/* last text object after a or i motion */
+ 	int long_char; 		/* line bigger than window */
+ 	int long_line;		/* line bigger than window */
+ 	int ocur_phys;		/* old current physical position */
+@@ -866,6 +867,154 @@ static void del_line(Vi_t *vp, int mode)
+ 	return;
+ }
+ 
++/*
++ * word class of virtual[v] for text objects: 0 blank, 1 word, 2 other
++ * if big is set, all non-blanks are words
++ */
++static int wordclass(Vi_t *vp, int v, int big)
++{
++	if( isblank(v) )
++		return 0;
++	return (big || isalph(v)) ? 1 : 2;
++}
++
++/*{	TEXTOBJECT( ai, mode )
++ *
++ *	Delete, change or yank the text object vp->lastobject.
++ *
++ *	ai	= 'a', the object with its blanks or brackets
++ *		= 'i', the inner object
++ *	mode	= as for delmotion()
++ *
++ *	Returns 1 if the object was found; else 0.
++ *
++}*/
++
++static int textobject(Vi_t *vp, int ai, int mode)
++{
++	static const char pairs[] = "()[]{}<>";
++	int obj = vp->lastobject, big = obj=='W';
++	int b, e, n, c, depth, open, close;
++	const char *cp;
++
++	if( obj=='w' || obj=='W' )
++	{
++		/*** each run of one word class counts once ***/
++		c = wordclass(vp,cur_virt,big);
++		for(b=cur_virt; b>0 && wordclass(vp,b-1,big)==c; b--);
++		for(e=b, n=vp->repeat; n>0 && e<=last_virt; n--)
++		{
++			c = wordclass(vp,e,big);
++			while( e<=last_virt && wordclass(vp,e,big)==c )
++				e++;
++			if( ai=='a' && e<=last_virt )
++			{
++				/*** a word takes the blanks after it; ***/
++				/* blanks take the word after them */
++				if( c )
++					c = 0;
++				else
++					c = wordclass(vp,e,big);
++				while( e<=last_virt && wordclass(vp,e,big)==c )
++					e++;
++			}
++		}
++		/*** no blanks after the word: take the blanks before it ***/
++		if( ai=='a' && !isblank(b) && !isblank(e-1) )
++			while( b>0 && isblank(b-1) )
++				b--;
++	}
++	else if( obj && iswascii(obj) && strchr("\"'`",obj) )
++	{
++		/*** pair the quotes from the start of the line ***/
++		/* and take the first pair that ends at or after the cursor */
++		for(b=INVALID, e=0; e<=last_virt; e++)
++		{
++			if( virtual[e]=='\\' )
++				e++;
++			else if( virtual[e]==obj )
++			{
++				if( b==INVALID )
++					b = e;
++				else if( e>=cur_virt )
++					break;
++				else
++					b = INVALID;
++			}
++		}
++		if( e>last_virt )
++			return 0;
++		if( ai=='a' )
++		{
++			/*** take the blanks after the quotes, else those before ***/
++			c = ++e;
++			while( e<=last_virt && isblank(e) )
++				e++;
++			if( e==c )
++				while( b>0 && isblank(b-1) )
++					b--;
++		}
++		else
++			b++;
++	}
++	else
++	{
++		if( obj=='b' )
++			obj = '(';
++		else if( obj=='B' )
++			obj = '{';
++		if( !obj || !iswascii(obj) || !(cp=strchr(pairs,obj)) )
++			return 0;
++		n = (cp-pairs) & ~1;
++		open = pairs[n];
++		close = pairs[n+1];
++		/*** find the repeat'th open bracket around the cursor; ***/
++		/* a close bracket under the cursor ends the first one */
++		b = cur_virt - (virtual[cur_virt]==close);
++		for(depth=0, n=vp->repeat; b>=0; b--)
++		{
++			if( virtual[b]==close )
++				depth++;
++			else if( virtual[b]==open )
++			{
++				if( depth )
++					depth--;
++				else if( --n==0 )
++					break;
++			}
++		}
++		if( b<0 )
++			return 0;
++		for(depth=0, e=b+1; e<=last_virt; e++)
++		{
++			if( virtual[e]==open )
++				depth++;
++			else if( virtual[e]==close )
++			{
++				if( depth==0 )
++					break;
++				depth--;
++			}
++		}
++		if( e>last_virt )
++			return 0;
++		if( ai=='a' )
++			e++;
++		else
++			b++;
++	}
++
++	/*** the object is virtual[b] up to virtual[e-1] ***/
++	cur_virt = b;
++	if( e>b )
++		cdelete(vp,e-b,mode);
++	else
++		--cur_virt;	/* empty object: c inserts at b */
++	if( mode=='y' )
++		cur_virt = b;
++	return 1;
++}
++
+ /*{	DELMOTION( motion, mode )
+  *
+  *	Delete through motion.
+@@ -886,6 +1035,8 @@ static int delmotion(Vi_t *vp,int motion, int mode)
+ 		return 0;
+ 	if( mode != 'y' )
+ 		save_v(vp);
++	if( motion=='a' || motion=='i' )
++		return textobject(vp,motion,mode);
+ 	begin = cur_virt;
+ 
+ 	/*** fake out the motion routines by appending a blank ***/
+@@ -1029,6 +1180,17 @@ static int getcount(Vi_t *vp,int c)
+ 	return c;
+ }
+ 
++/*
++ * get the motion for c, d or y; after a or i, also get the text object
++ */
++static int getmotion(Vi_t *vp)
++{
++	int c = getcount(vp,ed_getchar(vp->ed,-1));
++	if( c=='a' || c=='i' )
++		vp->lastobject = getrchar(vp);
++	return c;
++}
++
+ 
+ /*{	GETLINE( mode )
+  *
+@@ -2393,7 +2555,7 @@ addin:
+ 		if( mode )
+ 			c = vp->lastmotion;
+ 		else
+-			c = getcount(vp,ed_getchar(vp->ed,-1));
++			c = getmotion(vp);
+ chgeol:
+ 		vp->lastmotion = c;
+ 		if( cur_virt == INVALID )
+@@ -2429,7 +2591,7 @@ chgeol:
+ 			c = 'w';
+ 		}
+ 		else
+-			c = getcount(vp,ed_getchar(vp->ed,-1));
++			c = getmotion(vp);
+ deleol:
+ 		vp->lastmotion = c;
+ 		if( c == 'd' )
+@@ -2528,7 +2690,7 @@ deleol:
+ 		if( mode )
+ 			c = vp->lastmotion;
+ 		else
+-			c = getcount(vp,ed_getchar(vp->ed,-1));
++			c = getmotion(vp);
+ yankeol:
+ 		vp->lastmotion = c;
+ 		if( c == 'y' )
+-- 
+2.55.0
+
