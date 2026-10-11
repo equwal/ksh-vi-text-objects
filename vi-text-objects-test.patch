@@ -1,17 +1,18 @@
-From 80c6c8dddacdcc0af2e6e028c4a5d06d4019fdc9 Mon Sep 17 00:00:00 2001
+From 66095d3f05989a9199b613e157ba882d62024a0a Mon Sep 17 00:00:00 2001
 From: Spenser Truex <truex@equwal.com>
-Date: Sun, 11 Oct 2026 07:07:02 +0000
-Subject: [PATCH] tests/pty.sh: add vi mode text object tests
+Date: Sun, 11 Oct 2026 12:18:26 +0000
+Subject: [PATCH] vi: add text objects that follow vim: aw iw aW iW, quotes and
+ brackets for c, d and y
 
 ---
- src/cmd/ksh93/tests/pty.sh | 51 ++++++++++++++++++++++++++++++++++++++
- 1 file changed, 51 insertions(+)
+ src/cmd/ksh93/tests/pty.sh | 66 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 66 insertions(+)
 
 diff --git a/src/cmd/ksh93/tests/pty.sh b/src/cmd/ksh93/tests/pty.sh
-index 6cbffc6..7e233fa 100755
+index 6cbffc6..ee84251 100755
 --- a/src/cmd/ksh93/tests/pty.sh
 +++ b/src/cmd/ksh93/tests/pty.sh
-@@ -1505,5 +1505,56 @@ w echo bar　uux\Ebiq
+@@ -1505,5 +1505,71 @@ w echo bar　uux\Ebiq
  u ^bar　quux\r\n$
  !
  
@@ -64,6 +65,21 @@ index 6cbffc6..7e233fa 100755
 +p :test-15:
 +w echo foo\Edi(
 +u ^foo\r\n$
++p :test-16:
++w print -r -- 'a "b" c "d" e'\E0fcdi"
++u ^a "b""d" e\r\n$
++p :test-17:
++w print -r -- 'x (a b) y'\E0di(
++u ^x \(\) y\r\n$
++p :test-18:
++w print -r -- '(a ")" b)'\E0fadi(
++u ^\(\)\r\n$
++p :test-19:
++w echo foo\E3daw
++u ^foo\r\n$
++p :test-20:
++w echo foo bar\E0fbciwx\E$p
++u ^foo xbar\r\n$
 +!
 +
  # ======
